@@ -15,7 +15,8 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://127.0.0.1:8080/api/:path*",
+        destination:
+          "https://task-management-backend-production-781a.up.railway.app/api/:path*",
       },
     ];
   },

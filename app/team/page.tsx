@@ -43,6 +43,8 @@ export default function TeamDashboard() {
     note: "",
     file: null as File | null,
   });
+  const [isSubmittingFile, setIsSubmittingFile] = useState(false);
+  const [uploadError, setUploadError] = useState("");
 
   const handleSignOut = () => {
     localStorage.removeItem("loggedUser");
@@ -248,28 +250,116 @@ export default function TeamDashboard() {
     loadTasks();
   };
 
-  // COMPLETE TASK
+  // COMPLETE / SUBMIT TASK DELIVERABLE
   const submitCompletion = async () => {
     if (!completingTask) return;
+    setIsSubmittingFile(true);
+    setUploadError("");
 
-    const updatedTask = {
-      ...completingTask,
-      status: "Completed",
-      completed: true,
-      completionNote: completionForm.note,
-      hasFile: !!completionForm.file,
-    };
+    try {
+      let fileMeta: any = {
+        hasFile: completingTask.hasFile || false,
+        fileName: completingTask.fileName || "",
+        fileUrl: completingTask.fileUrl || "",
+        fileSize: completingTask.fileSize || "",
+        fileType: completingTask.fileType || "",
+      };
 
-    await fetch("/api/tasks", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updatedTask),
-    });
+      if (completionForm.file) {
+        const formData = new FormData();
+        formData.append("file", completionForm.file);
+        formData.append("taskId", String(completingTask.id));
 
-    setCompletingTask(null);
-    setCompletionForm({ note: "", file: null });
-    loadTasks();
+        const uploadRes = await fetch("/api/files/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!uploadRes.ok) {
+          const errData = await uploadRes.json().catch(() => ({}));
+          throw new Error(errData.error || "File upload failed.");
+        }
+
+        const uploadData = await uploadRes.json();
+        fileMeta = {
+          hasFile: true,
+          fileName: uploadData.fileName,
+          fileUrl: uploadData.fileUrl,
+          fileSize: uploadData.fileSize,
+          fileType: uploadData.fileType,
+        };
+      }
+
+      const updatedTask = {
+        ...completingTask,
+        status: "Completed",
+        completed: true,
+        completionNote: completionForm.note || completingTask.completionNote || "",
+        reviewStatus: "Pending Review",
+        ...fileMeta,
+      };
+
+      const putRes = await fetch("/api/tasks", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedTask),
+      });
+
+      if (!putRes.ok) {
+        throw new Error("Failed to update task milestone.");
+      }
+
+      setCompletingTask(null);
+      setCompletionForm({ note: "", file: null });
+      setUploadError("");
+      loadTasks();
+    } catch (err: any) {
+      console.error("Submission failed:", err);
+      setUploadError(err.message || "Failed to submit milestone.");
+    } finally {
+      setIsSubmittingFile(false);
+    }
   };
+
+  const getTaskStatus = (task: { status?: string; completed?: boolean }) => {
+    const status = String(task.status || "").trim().toLowerCase();
+    if (task.completed || status === "completed") return "Completed";
+    if (["in progress", "in-progress", "in_progress", "started", "active"].includes(status)) return "In progress";
+    if (status === "changes requested") return "Changes requested";
+    if (status === "paused") return "Paused";
+    return "Pending";
+  };
+
+  const taskStatusGroups = [
+    {
+      label: "Pending",
+      color: "bg-amber-500",
+      count: tasks.filter((task: { status?: string; completed?: boolean }) => getTaskStatus(task) === "Pending").length,
+    },
+    {
+      label: "In progress",
+      color: "bg-blue-500",
+      count: tasks.filter((task: { status?: string; completed?: boolean }) => getTaskStatus(task) === "In progress").length,
+    },
+    {
+      label: "Changes requested",
+      color: "bg-orange-500",
+      count: tasks.filter((task: { status?: string; completed?: boolean }) => getTaskStatus(task) === "Changes requested").length,
+    },
+    {
+      label: "Paused",
+      color: "bg-slate-400",
+      count: tasks.filter((task: { status?: string; completed?: boolean }) => getTaskStatus(task) === "Paused").length,
+    },
+    {
+      label: "Completed",
+      color: "bg-emerald-500",
+      count: tasks.filter((task: { status?: string; completed?: boolean }) => getTaskStatus(task) === "Completed").length,
+    },
+  ];
+
+  const taskChartMax = Math.max(4, ...taskStatusGroups.map((group) => group.count));
+  const taskChartTicks = [taskChartMax, Math.ceil(taskChartMax * 0.75), Math.ceil(taskChartMax * 0.5), Math.ceil(taskChartMax * 0.25), 0];
 
   const dashboardCards = [
     { label: "My Tasks", value: tasks.length, icon: "📋", color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200" },
@@ -447,6 +537,89 @@ export default function TeamDashboard() {
                   </div>
                 ))}
               </div>
+
+              <section
+                aria-labelledby="task-status-heading"
+                className="rounded-2xl border border-slate-200/90 bg-white/95 p-6 shadow-sm sm:p-8"
+              >
+                <div className="mb-7 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-blue-600">
+                      Task overview
+                    </p>
+                    <h2 id="task-status-heading" className="mt-1 text-xl font-black tracking-tight text-slate-900">
+                      Tasks by status
+                    </h2>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-500">
+                    {tasks.length} {tasks.length === 1 ? "task" : "tasks"} assigned
+                  </p>
+                </div>
+
+                <div
+                  className="grid grid-cols-[32px_minmax(0,1fr)] gap-x-3 sm:grid-cols-[44px_minmax(0,1fr)] sm:gap-x-4"
+                  role="img"
+                  aria-label={`Vertical bar chart of your assigned tasks by status. ${taskStatusGroups.map((group) => `${group.label}: ${group.count}`).join(", ")}.`}
+                >
+                  <div className="relative h-52 text-right text-[10px] font-semibold tabular-nums text-slate-400 sm:text-xs" aria-hidden="true">
+                    {taskChartTicks.map((tick, index) => (
+                      <span
+                        key={`${tick}-${index}`}
+                        className="absolute right-0 -translate-y-1/2"
+                        style={{ top: `${index * 25}%` }}
+                      >
+                        {tick}
+                      </span>
+                    ))}
+                  </div>
+                  <div>
+                    <div className="relative h-52 border-b border-slate-200">
+                      <div className="pointer-events-none absolute inset-0 flex flex-col justify-between" aria-hidden="true">
+                        {taskChartTicks.map((tick, index) => (
+                          <div key={`${tick}-${index}`} className="w-full border-t border-dashed border-slate-200" />
+                        ))}
+                      </div>
+                      <div className="absolute inset-x-0 bottom-0 grid h-full grid-cols-5 gap-2 px-1 sm:gap-6 sm:px-3">
+                        {taskStatusGroups.map((group) => {
+                          const percentage = (group.count / taskChartMax) * 100;
+
+                          return (
+                            <div
+                              key={group.label}
+                              className="group relative flex h-full flex-col items-center justify-end"
+                              aria-label={`${group.label}: ${group.count}`}
+                            >
+                              <span
+                                className="absolute z-10 -translate-y-full text-xs font-black tabular-nums text-slate-700 transition-all duration-200 group-hover:-translate-y-1 group-hover:text-blue-700 sm:text-sm"
+                                style={{ bottom: `calc(${percentage}% + 6px)` }}
+                              >
+                                {group.count}
+                              </span>
+                              <div
+                                className={`w-full max-w-14 origin-bottom rounded-t-lg ${group.color} shadow-sm transition-[height,filter,transform,box-shadow] duration-500 ease-out hover:-translate-y-1 hover:scale-x-110 hover:brightness-110 hover:shadow-lg`}
+                                style={{ height: `${percentage}%` }}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-5 gap-2 px-1 pt-3 text-center sm:gap-6 sm:px-3">
+                      {taskStatusGroups.map((group) => (
+                        <span key={group.label} className="text-[10px] font-bold leading-tight text-slate-600 sm:text-xs">
+                          {group.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {tasks.length === 0 && (
+                  <p className="mt-5 text-center text-sm text-slate-500">
+                    Your task status graph will appear when tasks are assigned to you.
+                  </p>
+                )}
+              </section>
             </div>
           )}
 
@@ -476,6 +649,7 @@ export default function TeamDashboard() {
                         <th className="py-3.5 px-6">Task Name</th>
                         <th className="py-3.5 px-6">Priority</th>
                         <th className="py-3.5 px-6">Status</th>
+                        <th className="py-3.5 px-6">Deliverable & Review</th>
                         <th className="py-3.5 px-6">Due Date</th>
                         <th className="py-3.5 px-6 text-center">Action</th>
                       </tr>
@@ -484,7 +658,12 @@ export default function TeamDashboard() {
                       {tasks.map((task: any) => (
                         <tr key={task.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="py-4 px-6 font-bold text-slate-900">
-                            <span className={task.completed ? "line-through text-slate-400" : ""}>{task.name}</span>
+                            <span className={task.completed ? "text-slate-700" : ""}>{task.name}</span>
+                            {task.completionNote && (
+                              <p className="text-[11px] text-slate-500 mt-0.5 font-normal line-clamp-2">
+                                Note: {task.completionNote}
+                              </p>
+                            )}
                           </td>
                           <td className="py-4 px-6">
                             <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
@@ -495,29 +674,89 @@ export default function TeamDashboard() {
                           </td>
                           <td className="py-4 px-6">
                             <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                              task.status === "Completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-blue-50 text-blue-700 border-blue-200"
+                              task.status === "Completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : task.status === "Changes Requested" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-blue-50 text-blue-700 border-blue-200"
                             }`}>
                               {task.status}
                             </span>
                           </td>
-                          <td className="py-4 px-6 text-slate-600 font-semibold text-xs">{task.dueDate || "—"}</td>
+                          <td className="py-4 px-6">
+                            <div className="flex flex-col gap-1.5 items-start">
+                              {task.hasFile && task.fileUrl ? (
+                                <a
+                                  href={task.fileUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-all shadow-sm"
+                                  title="Click to download or preview"
+                                >
+                                  <span>📎</span>
+                                  <span className="max-w-[140px] truncate">{task.fileName || "Download File"}</span>
+                                  {task.fileSize && <span className="text-[10px] text-blue-500 font-normal">({task.fileSize})</span>}
+                                </a>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">No deliverable file</span>
+                              )}
+
+                              {task.reviewStatus && (
+                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                                  task.reviewStatus === "Approved"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    : task.reviewStatus === "Changes Requested" || task.reviewStatus === "Needs Revision"
+                                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                                    : task.reviewStatus === "Rejected"
+                                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                                    : "bg-indigo-50 text-indigo-700 border-indigo-200 animate-pulse"
+                                }`}>
+                                  {task.reviewStatus === "Approved" ? "✓ Approved" : task.reviewStatus === "Changes Requested" ? "⚠ Revision Requested" : task.reviewStatus === "Pending Review" ? "⏳ Pending Review" : task.reviewStatus}
+                                </span>
+                              )}
+
+                              {task.reviewComment && (
+                                <div className="mt-1 p-2 bg-amber-50/80 border border-amber-200/70 rounded-xl text-[11px] text-amber-900 max-w-xs shadow-xs">
+                                  <span className="font-bold flex items-center gap-1 text-[10px] uppercase tracking-wider text-amber-800">
+                                    💬 Manager Feedback {task.reviewedAt ? `(${task.reviewedAt})` : ""}:
+                                  </span>
+                                  <p className="mt-0.5 font-medium leading-relaxed">{task.reviewComment}</p>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-slate-600 font-semibold text-xs whitespace-nowrap">{task.dueDate || "—"}</td>
                           <td className="py-4 px-6 text-center">
                             {!task.completed && task.status !== "Paused" ? (
                               <button
-                                onClick={() => setCompletingTask(task)}
+                                onClick={() => {
+                                  setCompletingTask(task);
+                                  setCompletionForm({ note: task.completionNote || "", file: null });
+                                  setUploadError("");
+                                }}
                                 className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold shadow-sm transition-all"
                               >
-                                Mark Complete ✓
+                                Complete & Upload ✓
                               </button>
                             ) : (
-                              <span className="text-xs font-bold text-emerald-600">✓ Finished</span>
+                              <div className="flex flex-col items-center gap-1">
+                                <span className="text-xs font-bold text-emerald-600">✓ Finished</span>
+                                <button
+                                  onClick={() => {
+                                    setCompletingTask(task);
+                                    setCompletionForm({ note: task.completionNote || "", file: null });
+                                    setUploadError("");
+                                  }}
+                                  className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-all"
+                                  title="Upload revised file or update note"
+                                >
+                                  Update File ⟳
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
                       ))}
                       {tasks.length === 0 && (
                         <tr>
-                          <td colSpan={5} className="py-12 text-center text-slate-400 font-medium">No tasks assigned to you right now.</td>
+                          <td colSpan={6} className="py-12 text-center text-slate-400 font-medium">No tasks assigned to you right now.</td>
                         </tr>
                       )}
                     </tbody>
@@ -776,47 +1015,90 @@ export default function TeamDashboard() {
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h2 className="text-lg font-black text-slate-900">Complete Task Milestone</h2>
-              <button onClick={() => setCompletingTask(null)} className="text-slate-400 hover:text-slate-600 font-bold text-lg">×</button>
+              <h2 className="text-lg font-black text-slate-900">
+                {completingTask.completed ? "Update Deliverable & Submission" : "Submit Deliverable & Complete"}
+              </h2>
+              <button
+                disabled={isSubmittingFile}
+                onClick={() => setCompletingTask(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-lg disabled:opacity-50"
+              >
+                ×
+              </button>
             </div>
+
+            {uploadError && (
+              <div className="p-3 bg-rose-50 text-rose-700 text-xs font-semibold rounded-xl border border-rose-200">
+                {uploadError}
+              </div>
+            )}
 
             <div className="space-y-3">
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase">Task Name</p>
+                <p className="text-xs font-bold text-slate-400 uppercase">Task Deliverable</p>
                 <p className="text-sm font-bold text-slate-900 mt-0.5">{completingTask.name}</p>
+                {completingTask.hasFile && completingTask.fileName && (
+                  <div className="mt-1 flex items-center gap-1.5 text-xs text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200">
+                    <span>📎 Currently attached:</span>
+                    <span className="font-semibold">{completingTask.fileName}</span>
+                    {completingTask.fileSize && <span className="text-[10px] text-blue-500">({completingTask.fileSize})</span>}
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Completion Notes</label>
+                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Completion Notes / Comments</label>
                 <textarea
                   rows={3}
                   value={completionForm.note}
                   onChange={(e) => setCompletionForm({ ...completionForm, note: e.target.value })}
-                  placeholder="Summarize outcomes or steps completed..."
+                  placeholder="Summarize outcomes, changes made, or link to work..."
                   className="w-full border border-slate-300 rounded-xl p-3 text-xs font-semibold focus:ring-2 focus:ring-blue-500 focus:outline-none resize-none"
                 />
               </div>
 
               <div>
-                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Attach Deliverable (Optional)</label>
-                <input
-                  type="file"
-                  onChange={(e) => setCompletionForm({ ...completionForm, file: e.target.files ? e.target.files[0] : null })}
-                  className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                />
+                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">
+                  {completingTask.hasFile ? "Replace Deliverable File (Optional)" : "Upload Deliverable File"}
+                </label>
+                <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl p-4 transition-all bg-slate-50/50">
+                  <input
+                    type="file"
+                    disabled={isSubmittingFile}
+                    onChange={(e) => setCompletionForm({ ...completionForm, file: e.target.files ? e.target.files[0] : null })}
+                    className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-500 file:transition-all file:cursor-pointer cursor-pointer"
+                  />
+                  {completionForm.file && (
+                    <div className="mt-2 text-xs font-bold text-slate-700 flex items-center gap-1">
+                      <span>✓ Ready to upload:</span>
+                      <span className="text-blue-600">{completionForm.file.name}</span>
+                      <span className="text-[10px] text-slate-400">({(completionForm.file.size / 1024).toFixed(1)} KB)</span>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-slate-400 mt-1">Upload documents, PDFs, ZIP archives, images, spreadsheets, or code.</p>
+                </div>
               </div>
             </div>
 
             <div className="flex gap-2 pt-2">
               <button
                 onClick={submitCompletion}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all shadow-md"
+                disabled={isSubmittingFile}
+                className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Mark Finished ✓
+                {isSubmittingFile ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    <span>Uploading & Submitting...</span>
+                  </>
+                ) : (
+                  <span>Submit Deliverable ✓</span>
+                )}
               </button>
               <button
                 onClick={() => setCompletingTask(null)}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition-all"
+                disabled={isSubmittingFile}
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition-all disabled:opacity-50"
               >
                 Cancel
               </button>

@@ -35,6 +35,12 @@ export default function ManagerDashboard() {
   const [requests, setRequests] = useState<any[]>([]);
   const [managerTasks, setManagerTasks] = useState<any[]>([]);
   const [editingTask, setEditingTask] = useState<any | null>(null);
+  const [reviewingTask, setReviewingTask] = useState<any | null>(null);
+  const [reviewDecision, setReviewDecision] = useState<string>("Approved");
+  const [reviewComment, setReviewComment] = useState<string>("");
+  const [submittingReview, setSubmittingReview] = useState<boolean>(false);
+  const [taskFile, setTaskFile] = useState<File | null>(null);
+  const [isCreatingTask, setIsCreatingTask] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -240,28 +246,93 @@ export default function ManagerDashboard() {
     }
   };
 
-  // ADD TASK
+  // ADD TASK (with optional specification/document upload)
   const addTask = async () => {
-    const newTask = {
-      id: Date.now(),
-      name: form.name,
-      priority: form.priority,
-      dueDate: form.dueDate,
-      status: "Pending",
-      completed: false,
-      assignedTo: form.assignedTo,
-      assignedBy: loggedUser,
-      type: "task",
-    };
+    if (!form.name.trim() || !form.assignedTo) return;
+    setIsCreatingTask(true);
 
-    await fetch("/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(newTask),
-    });
+    try {
+      let fileMeta: any = { hasFile: false };
 
-    setForm({ name: "", assignedTo: "", priority: "Medium", dueDate: todayDate });
-    loadTasks();
+      if (taskFile) {
+        const fd = new FormData();
+        fd.append("file", taskFile);
+        const upRes = await fetch("/api/files/upload", {
+          method: "POST",
+          body: fd,
+        });
+
+        if (upRes.ok) {
+          const upData = await upRes.json();
+          fileMeta = {
+            hasFile: true,
+            fileName: upData.fileName,
+            fileUrl: upData.fileUrl,
+            fileSize: upData.fileSize,
+            fileType: upData.fileType,
+          };
+        }
+      }
+
+      const newTask = {
+        id: Date.now(),
+        name: form.name.trim(),
+        priority: form.priority,
+        dueDate: form.dueDate,
+        status: "Pending",
+        completed: false,
+        assignedTo: form.assignedTo,
+        assignedBy: loggedUser,
+        type: "task",
+        ...fileMeta,
+      };
+
+      await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newTask),
+      });
+
+      setForm({ name: "", assignedTo: "", priority: "Medium", dueDate: todayDate });
+      setTaskFile(null);
+      loadTasks();
+    } catch (err) {
+      console.error("Failed to assign task:", err);
+      alert("Failed to assign task.");
+    } finally {
+      setIsCreatingTask(false);
+    }
+  };
+
+  // SUBMIT MANAGER REVIEW ON DELIVERABLE
+  const submitReview = async () => {
+    if (!reviewingTask) return;
+    setSubmittingReview(true);
+
+    try {
+      const res = await fetch(`/api/tasks/${reviewingTask.id}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reviewStatus: reviewDecision,
+          reviewComment: reviewComment,
+          reviewedBy: loggedUser || "Manager",
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to submit review");
+      }
+
+      setReviewingTask(null);
+      setReviewComment("");
+      loadTasks();
+    } catch (err) {
+      console.error("Review submission failed:", err);
+      alert("Failed to submit review. Please try again.");
+    } finally {
+      setSubmittingReview(false);
+    }
   };
 
   // DELETE
@@ -572,6 +643,26 @@ export default function ManagerDashboard() {
                       }}
                     />
                   </div>
+
+                  <div className="md:col-span-12 pt-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Attach Specification / Reference File (Optional)</label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="file"
+                        onChange={(e) => setTaskFile(e.target.files ? e.target.files[0] : null)}
+                        className="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer"
+                      />
+                      {taskFile && (
+                        <button
+                          type="button"
+                          onClick={() => setTaskFile(null)}
+                          className="text-xs text-rose-500 font-bold hover:underline shrink-0"
+                        >
+                          Clear File ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
@@ -618,10 +709,17 @@ export default function ManagerDashboard() {
 
                   <button
                     onClick={addTask}
-                    disabled={!form.name.trim() || !form.assignedTo}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2.5 rounded-xl shadow-md transition-all text-xs disabled:opacity-50"
+                    disabled={!form.name.trim() || !form.assignedTo || isCreatingTask}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-2.5 rounded-xl shadow-md transition-all text-xs disabled:opacity-50 flex items-center gap-2"
                   >
-                    + Assign Task
+                    {isCreatingTask ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                        <span>Assigning...</span>
+                      </>
+                    ) : (
+                      <span>+ Assign Task</span>
+                    )}
                   </button>
                 </div>
               </div>
@@ -646,6 +744,7 @@ export default function ManagerDashboard() {
                         <th className="py-3.5 px-6">Assigned Member</th>
                         <th className="py-3.5 px-6">Priority</th>
                         <th className="py-3.5 px-6">Status</th>
+                        <th className="py-3.5 px-6">Deliverable & Review</th>
                         <th className="py-3.5 px-6">Due Date</th>
                         <th className="py-3.5 px-6 text-center">Actions</th>
                       </tr>
@@ -653,7 +752,14 @@ export default function ManagerDashboard() {
                     <tbody className="divide-y divide-slate-100 text-sm">
                       {managerTasks.map((task: any) => (
                         <tr key={task.id} className="hover:bg-slate-50/70 transition-colors">
-                          <td className="py-4 px-6 font-bold text-slate-900">{task.name}</td>
+                          <td className="py-4 px-6 font-bold text-slate-900">
+                            <span>{task.name}</span>
+                            {task.completionNote && (
+                              <p className="text-[11px] text-slate-500 mt-0.5 font-normal line-clamp-2">
+                                Note: {task.completionNote}
+                              </p>
+                            )}
+                          </td>
                           <td className="py-4 px-6 text-slate-600 font-medium text-xs font-mono">{task.assignedTo}</td>
                           <td className="py-4 px-6">
                             <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
@@ -664,23 +770,76 @@ export default function ManagerDashboard() {
                           </td>
                           <td className="py-4 px-6">
                             <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                              task.status === "Completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : task.status === "Paused" ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-blue-50 text-blue-700 border-blue-200"
+                              task.status === "Completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : task.status === "Changes Requested" ? "bg-amber-50 text-amber-700 border-amber-200" : task.status === "Paused" ? "bg-yellow-50 text-yellow-700 border-yellow-200" : "bg-blue-50 text-blue-700 border-blue-200"
                             }`}>
                               {task.status}
                             </span>
                           </td>
-                          <td className="py-4 px-6 text-slate-600 font-semibold text-xs">{task.dueDate || "—"}</td>
+                          <td className="py-4 px-6">
+                            <div className="flex flex-col gap-1.5 items-start">
+                              {task.hasFile && task.fileUrl ? (
+                                <a
+                                  href={task.fileUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-all shadow-sm"
+                                  title="Click to download or preview deliverable"
+                                >
+                                  <span>📎</span>
+                                  <span className="max-w-[130px] truncate">{task.fileName || "View Deliverable"}</span>
+                                  {task.fileSize && <span className="text-[10px] text-blue-500 font-normal">({task.fileSize})</span>}
+                                </a>
+                              ) : task.completed ? (
+                                <span className="text-xs text-emerald-600 font-semibold">Submitted (No file)</span>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">No deliverable yet</span>
+                              )}
+
+                              {task.reviewStatus && (
+                                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
+                                  task.reviewStatus === "Approved"
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                    : task.reviewStatus === "Changes Requested" || task.reviewStatus === "Needs Revision"
+                                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                                    : task.reviewStatus === "Rejected"
+                                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                                    : "bg-indigo-50 text-indigo-700 border-indigo-200 animate-pulse"
+                                }`}>
+                                  {task.reviewStatus === "Approved" ? "✓ Approved" : task.reviewStatus === "Changes Requested" ? "⚠ Revision Requested" : task.reviewStatus === "Pending Review" ? "⏳ Pending Review" : task.reviewStatus}
+                                </span>
+                              )}
+
+                              {task.reviewComment && (
+                                <p className="text-[11px] text-slate-500 line-clamp-1 italic max-w-xs">
+                                  💬 "{task.reviewComment}"
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-4 px-6 text-slate-600 font-semibold text-xs whitespace-nowrap">{task.dueDate || "—"}</td>
                           <td className="py-4 px-6 text-center">
-                            <div className="flex items-center justify-center gap-2">
+                            <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                              <button
+                                onClick={() => {
+                                  setReviewingTask(task);
+                                  setReviewDecision(task.reviewStatus && task.reviewStatus !== "Pending Review" ? task.reviewStatus : "Approved");
+                                  setReviewComment(task.reviewComment || "");
+                                }}
+                                className="px-2.5 py-1 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition-all flex items-center gap-1"
+                                title="Review file deliverable and record decision"
+                              >
+                                <span>👁</span> Review
+                              </button>
                               <button
                                 onClick={() => setEditingTask(task)}
-                                className="px-2.5 py-1 text-xs font-bold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                                className="px-2 py-1 text-xs font-bold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
                               >
                                 Edit
                               </button>
                               <button
                                 onClick={() => pauseTask(task)}
-                                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-colors ${
+                                className={`px-2 py-1 text-xs font-bold rounded-lg transition-colors ${
                                   task.status === "Paused" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-amber-100 text-amber-700 hover:bg-amber-200"
                                 }`}
                               >
@@ -688,7 +847,7 @@ export default function ManagerDashboard() {
                               </button>
                               <button
                                 onClick={() => deleteAssignedTask(task.id)}
-                                className="px-2.5 py-1 text-xs font-bold rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
+                                className="px-2 py-1 text-xs font-bold rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
                               >
                                 Delete
                               </button>
@@ -698,7 +857,7 @@ export default function ManagerDashboard() {
                       ))}
                       {managerTasks.length === 0 && (
                         <tr>
-                          <td colSpan={6} className="py-12 text-center text-slate-400 font-medium">No tasks assigned yet.</td>
+                          <td colSpan={7} className="py-12 text-center text-slate-400 font-medium">No tasks assigned yet.</td>
                         </tr>
                       )}
                     </tbody>
@@ -986,6 +1145,165 @@ export default function ManagerDashboard() {
               <button
                 onClick={() => setEditingTask(null)}
                 className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Review Deliverable Modal */}
+      {reviewingTask && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  Deliverable Evaluation
+                </span>
+                <h2 className="text-lg font-black text-slate-900 mt-1">Review Deliverable & Task</h2>
+              </div>
+              <button
+                disabled={submittingReview}
+                onClick={() => setReviewingTask(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-xl disabled:opacity-50"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Task Info */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Deliverable Name</p>
+                  <p className="text-sm font-black text-slate-900">{reviewingTask.name}</p>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${
+                  reviewingTask.status === "Completed" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-blue-50 text-blue-700 border-blue-200"
+                }`}>
+                  {reviewingTask.status}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-200/60">
+                <div>
+                  <span className="text-slate-400 font-semibold text-[11px]">Assigned Member:</span>
+                  <p className="font-mono text-slate-800 font-bold truncate">{reviewingTask.assignedTo}</p>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-semibold text-[11px]">Due Date:</span>
+                  <p className="text-slate-800 font-bold">{reviewingTask.dueDate || "—"}</p>
+                </div>
+              </div>
+
+              {reviewingTask.completionNote && (
+                <div className="pt-2 border-t border-slate-200/60 text-xs">
+                  <span className="text-slate-400 font-semibold text-[11px]">Member Notes:</span>
+                  <p className="text-slate-700 font-medium italic mt-0.5">"{reviewingTask.completionNote}"</p>
+                </div>
+              )}
+            </div>
+
+            {/* Deliverable File Card */}
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase mb-2 block">Attached File Deliverable</label>
+              {reviewingTask.hasFile && reviewingTask.fileUrl ? (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg shrink-0 shadow-sm">
+                      📎
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900 truncate" title={reviewingTask.fileName}>
+                        {reviewingTask.fileName || "Submitted File"}
+                      </p>
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        {reviewingTask.fileSize ? `Size: ${reviewingTask.fileSize}` : "Deliverable Attached"}
+                      </p>
+                    </div>
+                  </div>
+                  <a
+                    href={reviewingTask.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md transition-all shrink-0 flex items-center gap-1.5"
+                  >
+                    <span>📥</span> Download
+                  </a>
+                </div>
+              ) : (
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center text-xs text-slate-400 italic">
+                  No file was uploaded by the team member for this task yet.
+                </div>
+              )}
+            </div>
+
+            {/* Review Decision */}
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase mb-2 block">Review Decision *</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: "Approved", label: "Approve ✓", desc: "Deliverable accepted", color: "border-emerald-500 bg-emerald-600 text-white" },
+                  { id: "Changes Requested", label: "Request Changes ⚠", desc: "Revisions needed", color: "border-amber-500 bg-amber-600 text-white" },
+                  { id: "Rejected", label: "Reject ✗", desc: "Deliverable rejected", color: "border-rose-500 bg-rose-600 text-white" },
+                ].map((dec) => {
+                  const isSelected = reviewDecision === dec.id;
+                  return (
+                    <button
+                      key={dec.id}
+                      type="button"
+                      onClick={() => setReviewDecision(dec.id)}
+                      className={`p-3 rounded-2xl text-left border-2 transition-all ${
+                        isSelected
+                          ? `${dec.color} shadow-md font-black`
+                          : "border-slate-200 bg-slate-50/60 hover:bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      <p className="text-xs font-bold">{dec.label}</p>
+                      <p className={`text-[10px] mt-0.5 ${isSelected ? "text-white/80" : "text-slate-400"}`}>
+                        {dec.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Review Comments */}
+            <div>
+              <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Review Feedback / Comments</label>
+              <textarea
+                rows={3}
+                value={reviewComment}
+                onChange={(e) => setReviewComment(e.target.value)}
+                placeholder="Write specific remarks, questions, revision instructions, or approval note for the member..."
+                className="w-full border border-slate-300 rounded-xl p-3 text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none resize-none bg-slate-50 focus:bg-white"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 pt-1 border-t border-slate-100">
+              <button
+                onClick={submitReview}
+                disabled={submittingReview}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-xs transition-all shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {submittingReview ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                    <span>Submitting Decision...</span>
+                  </>
+                ) : (
+                  <span>Submit Review Decision ✓</span>
+                )}
+              </button>
+              <button
+                onClick={() => setReviewingTask(null)}
+                disabled={submittingReview}
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition-all disabled:opacity-50"
               >
                 Cancel
               </button>

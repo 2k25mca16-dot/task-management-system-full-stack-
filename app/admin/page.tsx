@@ -619,10 +619,23 @@ export default function AdminPage() {
                               {task.completed ? "Done" : task.status || "Pending"}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2 text-[11px] text-slate-500 pt-1">
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 pt-1">
                             <span className="font-bold">Priority: {task.priority}</span>
                             <span>•</span>
                             <span>Due: {task.dueDate || "None"}</span>
+                            {task.hasFile && task.fileUrl && (
+                              <>
+                                <span>•</span>
+                                <a href={task.fileUrl} target="_blank" rel="noopener noreferrer" download className="font-bold text-blue-600 hover:underline">
+                                  📎 {task.fileName || "File"}
+                                </a>
+                              </>
+                            )}
+                            {task.reviewStatus && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700">
+                                {task.reviewStatus}
+                              </span>
+                            )}
                           </div>
                         </div>
                       ))
@@ -659,10 +672,23 @@ export default function AdminPage() {
                               {task.completed ? "Completed" : task.status || "Pending"}
                             </span>
                           </div>
-                          <div className="flex items-center gap-2 text-[11px] text-slate-500 pt-1">
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 pt-1">
                             <span className="font-bold">Type: {task.type}</span>
                             <span>•</span>
                             <span>Due: {task.dueDate || "None"}</span>
+                            {task.hasFile && task.fileUrl && (
+                              <>
+                                <span>•</span>
+                                <a href={task.fileUrl} target="_blank" rel="noopener noreferrer" download className="font-bold text-blue-600 hover:underline">
+                                  📎 {task.fileName || "File"}
+                                </a>
+                              </>
+                            )}
+                            {task.reviewStatus && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700">
+                                {task.reviewStatus}
+                              </span>
+                            )}
                           </div>
                         </div>
                       ))

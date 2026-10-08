@@ -15,6 +15,11 @@ interface TaskItem {
   type: string;
   completionNote?: string;
   hasFile?: boolean;
+  fileName?: string;
+  fileUrl?: string;
+  fileSize?: string;
+  reviewStatus?: string;
+  reviewComment?: string;
   createdAt?: string;
 }
 
@@ -905,6 +910,17 @@ export default function UserPage() {
                               </p>
                               {parsed.desc && (
                                 <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{parsed.desc}</p>
+                              )}
+                              {task.hasFile && task.fileUrl && (
+                                <a
+                                  href={task.fileUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  download
+                                  className="inline-flex items-center gap-1 mt-1 text-[11px] font-bold text-blue-600 hover:underline"
+                                >
+                                  📎 {task.fileName || "Download Attached File"} {task.fileSize ? `(${task.fileSize})` : ""}
+                                </a>
                               )}
                             </td>
                             <td className="py-4 px-6">

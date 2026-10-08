@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import AiAssistant from "../components/AiAssistant";
 
 type ChatMessage = {
   id: string;
@@ -56,6 +57,7 @@ export default function ManagerDashboard() {
   const [form, setForm] = useState({
     name: "",
     assignedTo: "",
+    secondaryAssignee: "",
     priority: "Medium",
     dueDate: todayDate,
   });
@@ -78,13 +80,17 @@ export default function ManagerDashboard() {
   }, []);
 
   // LOAD USERS
-  useEffect(() => {
+  const loadUsers = () => {
     fetch("/api/users")
       .then((res) => res.json())
       .then((data) => {
         if (Array.isArray(data)) setUsers(data);
       })
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    loadUsers();
   }, []);
 
   const teamUsers = users
@@ -282,6 +288,7 @@ export default function ManagerDashboard() {
         status: "Pending",
         completed: false,
         assignedTo: form.assignedTo,
+        secondaryAssignee: form.secondaryAssignee || "",
         assignedBy: loggedUser,
         type: "task",
         ...fileMeta,
@@ -293,7 +300,7 @@ export default function ManagerDashboard() {
         body: JSON.stringify(newTask),
       });
 
-      setForm({ name: "", assignedTo: "", priority: "Medium", dueDate: todayDate });
+      setForm({ name: "", assignedTo: "", secondaryAssignee: "", priority: "Medium", dueDate: todayDate });
       setTaskFile(null);
       loadTasks();
     } catch (err) {
@@ -301,6 +308,126 @@ export default function ManagerDashboard() {
       alert("Failed to assign task.");
     } finally {
       setIsCreatingTask(false);
+    }
+  };
+
+  // REMOVE PRIMARY ASSIGNEE (Auto-transfers task to backup assignee)
+  const handleRemovePrimaryAssignee = async (task: any) => {
+    const primaryName = task.assignedTo || "Current assignee";
+    const backupName = task.secondaryAssignee ? task.secondaryAssignee.trim() : "";
+
+    const confirmMsg = backupName
+      ? `Remove primary team member "${primaryName}" from this task?\n\nThis task will AUTOMATICALLY be transferred to the backup person: "${backupName}".`
+      : `Remove primary team member "${primaryName}" from this task?\n\nNo backup member is assigned, so this task will become Unassigned.`;
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/remove-primary`, {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        // Fallback update
+        await fetch("/api/tasks", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: task.id,
+            assignedTo: backupName || "Unassigned",
+            secondaryAssignee: "",
+          }),
+        });
+      }
+
+      alert(
+        backupName
+          ? `Primary member removed. Task automatically transferred to backup person: ${backupName}!`
+          : `Primary member removed. Task is now unassigned.`
+      );
+      loadTasks();
+    } catch (err) {
+      console.error("Error removing primary assignee:", err);
+      // Fallback update
+      await fetch("/api/tasks", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: task.id,
+          assignedTo: backupName || "Unassigned",
+          secondaryAssignee: "",
+        }),
+      });
+      loadTasks();
+    }
+  };
+
+  // REMOVE TEAM MEMBER (Auto-transfers all their tasks to backup persons)
+  const handleRemoveTeamMember = async (email: string, name: string) => {
+    if (!email) return;
+    if (
+      !window.confirm(
+        `Remove team member "${name}" (${email}) from the system?\n\nAny tasks assigned to this primary member will AUTOMATICALLY transfer to their secondary backup assignee (who will become the new primary person).`
+      )
+    ) {
+      return;
+    }
+
+    let transferredCount = 0;
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+      const affectedTasks = managerTasks.filter(
+        (t: any) =>
+          (t.assignedTo && t.assignedTo.trim().toLowerCase() === cleanEmail) ||
+          (t.secondaryAssignee && t.secondaryAssignee.trim().toLowerCase() === cleanEmail)
+      );
+
+      for (const t of affectedTasks) {
+        if (t.assignedTo && t.assignedTo.trim().toLowerCase() === cleanEmail) {
+          const fallback =
+            t.secondaryAssignee && t.secondaryAssignee.trim().toLowerCase() !== cleanEmail
+              ? t.secondaryAssignee.trim()
+              : "Unassigned";
+          await fetch("/api/tasks", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...t,
+              assignedTo: fallback,
+              secondaryAssignee: "",
+            }),
+          });
+          transferredCount++;
+        } else if (t.secondaryAssignee && t.secondaryAssignee.trim().toLowerCase() === cleanEmail) {
+          await fetch("/api/tasks", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...t,
+              secondaryAssignee: "",
+            }),
+          });
+        }
+      }
+    } catch (taskErr) {
+      console.error("Error transferring tasks during team member removal:", taskErr);
+    }
+
+    try {
+      await fetch("/api/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      alert(
+        transferredCount > 0
+          ? `Team member removed. ${transferredCount} task(s) previously assigned to "${name}" have automatically transferred to their secondary backup assignees (who are now the primary assignees).`
+          : `Team member removed successfully.`
+      );
+      loadTasks();
+      loadUsers();
+    } catch (err) {
+      console.error("Failed to remove team member:", err);
     }
   };
 
@@ -598,21 +725,50 @@ export default function ManagerDashboard() {
                     />
                   </div>
 
-                  <div className="md:col-span-3">
-                    <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Assignee *</label>
+                  <div className="md:col-span-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-slate-700 uppercase">Primary Assignee *</label>
+                      <span className="text-[10px] font-black text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">1st Person</span>
+                    </div>
                     <select
                       className="w-full border border-slate-300 bg-slate-50 text-slate-900 font-semibold rounded-xl px-3 py-2.5 text-sm focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                       value={form.assignedTo}
-                      onChange={(e) => setForm({ ...form, assignedTo: e.target.value })}
+                      onChange={(e) => {
+                        const newPrimary = e.target.value;
+                        setForm({
+                          ...form,
+                          assignedTo: newPrimary,
+                          secondaryAssignee: form.secondaryAssignee === newPrimary ? "" : form.secondaryAssignee,
+                        });
+                      }}
                     >
-                      <option value="">Select Assignee</option>
+                      <option value="">Select Primary Member</option>
                       {assignableUsers.map((u: any, i) => (
                         <option key={i} value={u.email}>{u.name} ({u.email})</option>
                       ))}
                     </select>
                   </div>
 
-                  <div className="md:col-span-2">
+                  <div className="md:col-span-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-bold text-slate-700 uppercase">Backup Assignee (Optional)</label>
+                      <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">2nd Person (Auto-Fallback)</span>
+                    </div>
+                    <select
+                      className="w-full border border-slate-300 bg-slate-50 text-slate-900 font-semibold rounded-xl px-3 py-2.5 text-sm focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      value={form.secondaryAssignee}
+                      onChange={(e) => setForm({ ...form, secondaryAssignee: e.target.value })}
+                    >
+                      <option value="">No Backup Person</option>
+                      {assignableUsers
+                        .filter((u: any) => u.email !== form.assignedTo)
+                        .map((u: any, i) => (
+                          <option key={i} value={u.email}>{u.name} ({u.email})</option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div className="md:col-span-3">
                     <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">Priority</label>
                     <select
                       className="w-full border border-slate-300 bg-slate-50 text-slate-900 font-semibold rounded-xl px-3 py-2.5 text-sm focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
@@ -760,7 +916,26 @@ export default function ManagerDashboard() {
                               </p>
                             )}
                           </td>
-                          <td className="py-4 px-6 text-slate-600 font-medium text-xs font-mono">{task.assignedTo}</td>
+                          <td className="py-4 px-6 text-slate-600 font-medium text-xs">
+                            <div className="flex flex-col gap-1.5 items-start">
+                              <div className="flex items-center gap-1.5">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-blue-100 text-blue-700 uppercase tracking-wider">
+                                  Primary
+                                </span>
+                                <span className="font-mono text-slate-800 font-bold">{task.assignedTo || "Unassigned"}</span>
+                              </div>
+                              {task.secondaryAssignee ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    Backup
+                                  </span>
+                                  <span className="font-mono text-slate-600">{task.secondaryAssignee}</span>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 italic">No backup assigned</span>
+                              )}
+                            </div>
+                          </td>
                           <td className="py-4 px-6">
                             <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
                               task.priority === "High" ? "bg-rose-50 text-rose-700 border-rose-200" : task.priority === "Medium" ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-emerald-50 text-emerald-700 border-emerald-200"
@@ -837,6 +1012,15 @@ export default function ManagerDashboard() {
                               >
                                 Edit
                               </button>
+                              {task.assignedTo && task.assignedTo !== "Unassigned" && (
+                                <button
+                                  onClick={() => handleRemovePrimaryAssignee(task)}
+                                  className="px-2 py-1 text-xs font-bold rounded-lg bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 transition-colors flex items-center gap-1"
+                                  title={task.secondaryAssignee ? `Remove primary assignee and reassign task to backup (${task.secondaryAssignee})` : "Unassign current member"}
+                                >
+                                  <span>⤾</span> Transfer
+                                </button>
+                              )}
                               <button
                                 onClick={() => pauseTask(task)}
                                 className={`px-2 py-1 text-xs font-bold rounded-lg transition-colors ${
@@ -1055,6 +1239,7 @@ export default function ManagerDashboard() {
                         <th className="py-3.5 px-6">Member Name</th>
                         <th className="py-3.5 px-6">Contact Email</th>
                         <th className="py-3.5 px-6">Designation</th>
+                        <th className="py-3.5 px-6 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-sm">
@@ -1067,11 +1252,20 @@ export default function ManagerDashboard() {
                               Team Member
                             </span>
                           </td>
+                          <td className="py-4 px-6 text-right">
+                            <button
+                              onClick={() => handleRemoveTeamMember(u.email, u.name)}
+                              className="px-2.5 py-1 text-xs font-bold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 transition-colors"
+                              title="Remove member and automatically reassign their tasks to secondary backup assignees"
+                            >
+                              Remove Member 🗑
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {teamUsers.length === 0 && (
                         <tr>
-                          <td colSpan={3} className="py-12 text-center text-slate-400 font-medium">No team members assigned.</td>
+                          <td colSpan={4} className="py-12 text-center text-slate-400 font-medium">No team members assigned.</td>
                         </tr>
                       )}
                     </tbody>
@@ -1132,6 +1326,56 @@ export default function ManagerDashboard() {
                   onChange={(e) => setEditingTask({ ...editingTask, dueDate: e.target.value })}
                   className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block">
+                  Primary Assignee (1st Person)
+                </label>
+                <select
+                  value={editingTask.assignedTo || ""}
+                  onChange={(e) => {
+                    const newPrimary = e.target.value;
+                    setEditingTask({
+                      ...editingTask,
+                      assignedTo: newPrimary,
+                      // Clear secondary if it matches new primary
+                      secondaryAssignee: editingTask.secondaryAssignee === newPrimary ? "" : editingTask.secondaryAssignee,
+                    });
+                  }}
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
+                >
+                  <option value="">-- Select Primary Assignee --</option>
+                  {teamUsers.map((u: any, i: number) => (
+                    <option key={i} value={u.email}>
+                      {u.name} ({u.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase mb-1 block flex items-center justify-between">
+                  <span>Backup Assignee (2nd Person - Auto Fallback)</span>
+                  <span className="text-[10px] text-emerald-600 font-semibold normal-case">Optional</span>
+                </label>
+                <select
+                  value={editingTask.secondaryAssignee || ""}
+                  onChange={(e) => setEditingTask({ ...editingTask, secondaryAssignee: e.target.value })}
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
+                >
+                  <option value="">-- No Backup Assignee --</option>
+                  {teamUsers
+                    .filter((u: any) => u.email !== editingTask.assignedTo)
+                    .map((u: any, i: number) => (
+                      <option key={i} value={u.email}>
+                        {u.name} ({u.email})
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  If primary member is removed or unassigned, the task automatically transfers to this person.
+                </p>
               </div>
             </div>
 
@@ -1311,6 +1555,14 @@ export default function ManagerDashboard() {
           </div>
         </div>
       )}
+
+      {/* Floating Orange AI Assistant Widget (Bottom Right) */}
+      <AiAssistant
+        role="manager"
+        loggedUser={loggedUser || "Manager"}
+        tasks={[...requests, ...managerTasks]}
+        users={users}
+      />
     </div>
   );
 }

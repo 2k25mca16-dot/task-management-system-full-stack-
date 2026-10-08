@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import AiAssistant from "../components/AiAssistant";
 
 export default function AdminPage() {
   const [users, setUsers] = useState<any[]>([]);
@@ -30,14 +31,17 @@ export default function AdminPage() {
     router.push("/login");
   };
 
-  useEffect(() => {
-    setMounted(true);
-    loadUsers();
-
+  const loadTasks = () => {
     fetch("/api/tasks")
       .then((res) => res.json())
       .then((data) => setTasks(Array.isArray(data) ? data : []))
       .catch(() => setTasks([]));
+  };
+
+  useEffect(() => {
+    setMounted(true);
+    loadUsers();
+    loadTasks();
   }, []);
 
   const handleDeleteUser = async (email: string) => {
@@ -54,7 +58,9 @@ export default function AdminPage() {
       return;
     }
 
-    const confirmed = window.confirm(`Permanently remove user "${email}" from the system?`);
+    const confirmed = window.confirm(
+      `Permanently remove user "${email}" from the system?\n\nAny tasks assigned to this primary member will AUTOMATICALLY transfer to their secondary/backup assignee (who will become the new primary person).`
+    );
     if (!confirmed) return;
 
     const localUsers = JSON.parse(localStorage.getItem("users") || "[]");
@@ -64,17 +70,62 @@ export default function AdminPage() {
 
     localStorage.setItem("users", JSON.stringify(updatedLocalUsers));
 
+    // 1. Proactively transfer all tasks where this user is primary assignee to their secondary assignee
+    let transferredCount = 0;
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+      const affectedTasks = tasks.filter(
+        (t: any) =>
+          (t.assignedTo && t.assignedTo.trim().toLowerCase() === cleanEmail) ||
+          (t.secondaryAssignee && t.secondaryAssignee.trim().toLowerCase() === cleanEmail)
+      );
+
+      for (const t of affectedTasks) {
+        if (t.assignedTo && t.assignedTo.trim().toLowerCase() === cleanEmail) {
+          const fallback =
+            t.secondaryAssignee && t.secondaryAssignee.trim().toLowerCase() !== cleanEmail
+              ? t.secondaryAssignee.trim()
+              : "Unassigned";
+          await fetch("/api/tasks", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...t,
+              assignedTo: fallback,
+              secondaryAssignee: "",
+            }),
+          });
+          transferredCount++;
+        } else if (t.secondaryAssignee && t.secondaryAssignee.trim().toLowerCase() === cleanEmail) {
+          await fetch("/api/tasks", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...t,
+              secondaryAssignee: "",
+            }),
+          });
+        }
+      }
+    } catch (taskErr) {
+      console.error("Error auto-transferring tasks to secondary person:", taskErr);
+    }
+
     try {
       await fetch("/api/users", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      if (transferredCount > 0) {
+        alert(`User removed. ${transferredCount} task(s) previously assigned to this user have automatically transferred to their secondary assignee (who is now the primary assignee).`);
+      }
     } catch (error) {
       console.error("Delete failed", error);
     }
 
     loadUsers();
+    loadTasks();
   };
 
   const handleRoleChange = async (email: string, newRole: string) => {
@@ -611,7 +662,14 @@ export default function AdminPage() {
                           <div className="flex justify-between items-start">
                             <div>
                               <h4 className="font-bold text-slate-900 text-sm">{task.name}</h4>
-                              <p className="text-xs text-slate-500 mt-0.5">By: {task.assignedBy || "Manager"} → To: {task.assignedTo || "Unassigned"}</p>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                By: {task.assignedBy || "Manager"} → To: <span className="font-semibold text-slate-800">{task.assignedTo || "Unassigned"}</span>
+                                {task.secondaryAssignee && (
+                                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    Backup: {task.secondaryAssignee}
+                                  </span>
+                                )}
+                              </p>
                             </div>
                             <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
                               task.completed ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"
@@ -707,6 +765,14 @@ export default function AdminPage() {
           </footer>
         </div>
       </main>
+
+      {/* Floating Orange AI Assistant Widget (Bottom Right) */}
+      <AiAssistant
+        role="admin"
+        loggedUser="admin@gmail.com"
+        tasks={tasks}
+        users={users}
+      />
     </div>
   );
 }

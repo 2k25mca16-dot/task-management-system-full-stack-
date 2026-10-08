@@ -12,11 +12,12 @@ const nextConfig: NextConfig = {
     root: __dirname,
   },
   async rewrites() {
+    const backend =
+      process.env.BACKEND_URL || "http://127.0.0.1:8080";
     return [
       {
         source: "/api/:path*",
-        destination:
-          "https://task-management-backend-production-781a.up.railway.app/api/:path*",
+        destination: `${backend}/api/:path*`,
       },
     ];
   },

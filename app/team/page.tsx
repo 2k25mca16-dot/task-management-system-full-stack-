@@ -659,6 +659,13 @@ export default function TeamDashboard() {
                         <tr key={task.id} className="hover:bg-slate-50/70 transition-colors">
                           <td className="py-4 px-6 font-bold text-slate-900">
                             <span className={task.completed ? "text-slate-700" : ""}>{task.name}</span>
+                            {task.secondaryAssignee && (
+                              <div className="mt-1 flex items-center gap-1">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                  Backup: {task.secondaryAssignee}
+                                </span>
+                              </div>
+                            )}
                             {task.completionNote && (
                               <p className="text-[11px] text-slate-500 mt-0.5 font-normal line-clamp-2">
                                 Note: {task.completionNote}

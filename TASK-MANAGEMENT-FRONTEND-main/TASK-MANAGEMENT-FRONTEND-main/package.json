@@ -1,0 +1,13 @@
+{
+  "name": "task-management-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix task-management-main run dev",
+    "frontend": "npm --prefix task-management-main run dev",
+    "backend": "cd spring-boot-backend && .\\mvnw.cmd spring-boot:run",
+    "start": "npm --prefix task-management-main run dev",
+    "dev:frontend": "npm --prefix task-management-main run dev",
+    "dev:backend": "cd spring-boot-backend && .\\mvnw.cmd spring-boot:run"
+  }
+}
